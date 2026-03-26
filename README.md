@@ -1,5 +1,48 @@
 # PRM Project - Hệ thống quản lý và đặt dịch vụ gia đình
 
+## 0. Tổng quan chức năng đã hoàn thiện
+
+- Quản lý danh mục dịch vụ (CRUD, tìm kiếm/lọc, xác nhận xóa, thông báo rõ ràng)
+- Quản lý gói dịch vụ (CRUD, chọn danh mục, tìm kiếm/lọc, xác nhận xóa, thông báo rõ ràng)
+- Quản lý người dùng (CRUD, kích hoạt/vô hiệu hóa, tìm kiếm/lọc, xác nhận vô hiệu hóa, thông báo rõ ràng)
+- Đặt lịch dịch vụ, phân công thợ, cập nhật trạng thái đơn hàng
+- Đánh giá, phản hồi, tự động tính điểm trung bình thợ qua trigger DB
+- Xác thực JWT, phân quyền admin/worker/customer
+- Giao diện Flutter hiện đại, xác thực token cho mọi API quản trị
+- Thông báo thành công/thất bại rõ ràng cho mọi thao tác quản trị
+
+## 0.1. Hướng dẫn sử dụng nhanh
+
+### Backend
+- Chạy project PRM_Backend_Server bằng Visual Studio hoặc dotnet CLI
+- Đảm bảo connection string trỏ đúng SQL Server, đã chạy full_setup.sql để tạo DB
+- Swagger UI: http://localhost:5000/swagger để test API
+
+### Mobile App (Flutter)
+- Mở thư mục Flutter/ trên VS Code hoặc Android Studio
+- Chạy lệnh `flutter pub get` để cài dependencies
+- Chạy app trên thiết bị/emulator: `flutter run`
+- Đăng nhập bằng tài khoản mẫu trong DB (admin@homeservice.com / Demo123!)
+
+### Tài khoản mẫu
+- Admin: admin@homeservice.com / Demo123!
+- Worker: worker@homeservice.com / Demo123!
+- Customer: customer@homeservice.com / Demo123!
+
+## 0.2. Các tính năng quản trị nổi bật
+
+- Tìm kiếm/lọc nhanh danh mục, gói dịch vụ, user
+- Xác nhận thao tác nguy hiểm (xóa, vô hiệu hóa) bằng dialog cảnh báo
+- Thông báo rõ ràng khi thao tác thành công/thất bại
+- Chọn danh mục khi thêm/sửa gói dịch vụ
+- Tự động làm mới danh sách sau mỗi thao tác CRUD
+
+## 0.3. Lưu ý triển khai
+- Không sửa đổi cấu trúc DB nếu không cần thiết, mọi logic tuân thủ full_setup.sql
+- Token JWT phải được truyền trong header Authorization cho mọi API quản trị
+- Đảm bảo quyền truy cập phù hợp (admin mới thao tác được các chức năng quản trị)
+
+
 ## 1. Mục tiêu dự án
 PRM Project là hệ thống quản lý và đặt dịch vụ gia đình, giúp kết nối khách hàng với các thợ/nhà cung cấp dịch vụ một cách nhanh chóng, tiện lợi. Dự án gồm hai thành phần chính:
 - **Backend**: Xây dựng bằng ASP.NET Core, cung cấp API cho ứng dụng di động và quản lý toàn bộ logic nghiệp vụ, xác thực, phân quyền, xử lý đơn hàng, đánh giá, thanh toán...
