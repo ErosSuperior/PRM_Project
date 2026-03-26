@@ -1,0 +1,113 @@
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using PRM_Backend_Server.Models;
+using PRM_Backend_Server.ViewModels.Pagination;
+using PRM_Backend_Server.ViewModels.Response;
+using Microsoft.EntityFrameworkCore;
+
+namespace PRM_Backend_Server.Controllers
+{
+    [Route("user/[controller]")]
+    [ApiController]
+    public class UserManagementController : ControllerBase
+    {
+        private readonly HomeServiceAppContext _db;
+        private readonly ILogger<UserManagementController> _logger;
+
+        public UserManagementController(HomeServiceAppContext db, ILogger<UserManagementController> logger)
+        {
+            _db = db;
+            _logger = logger;
+        }
+
+        [Authorize(Roles = "admin")]
+        [HttpGet]
+        public async Task<IActionResult> GetWorkerUsers([FromQuery] PaginationRequest request)
+        {
+            // Base query: include user navigation so we can access user fields
+            var query = _db.Workers.Include(w => w.WorkerNavigation).AsQueryable();
+
+            // Only consider workers that have a linked user
+            query = query.Where(w => w.WorkerNavigation != null);
+
+            // Apply FilterBy: expected format "CLEANING PLUMBING" (tokens separated by space)
+            if (!string.IsNullOrWhiteSpace(request.FilterBy) && request.FilterBy != "default")
+            {
+                var tokens = request.FilterBy.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (tokens.Length > 0)
+                {
+                    query = query.Where(w => tokens.Any(t => !string.IsNullOrWhiteSpace(w.Bio) &&
+                        w.Bio.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0));
+                }
+            }
+
+            // Apply search term to name, email, phone or bio
+            if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+            {
+                var st = request.SearchTerm.Trim();
+                query = query.Where(w => (w.WorkerNavigation.FullName != null && EF.Functions.Like(w.WorkerNavigation.FullName, $"%{st}%"))
+                    || (w.WorkerNavigation.Email != null && EF.Functions.Like(w.WorkerNavigation.Email, $"%{st}%"))
+                    || (w.WorkerNavigation.Phone != null && EF.Functions.Like(w.WorkerNavigation.Phone, $"%{st}%"))
+                    || (w.Bio != null && EF.Functions.Like(w.Bio, $"%{st}%")));
+            }
+
+            // Sorting
+            var ascending = request.SortOrder >= 0;
+            switch (request.SortBy?.ToLowerInvariant())
+            {
+                case "experienceyears":
+                case "experience":
+                    query = ascending ? query.OrderBy(w => w.ExperienceYears) : query.OrderByDescending(w => w.ExperienceYears);
+                    break;
+                case "averagerating":
+                case "rating":
+                    query = ascending ? query.OrderBy(w => w.AverageRating) : query.OrderByDescending(w => w.AverageRating);
+                    break;
+                case "totalreviews":
+                case "reviews":
+                    query = ascending ? query.OrderBy(w => w.TotalReviews) : query.OrderByDescending(w => w.TotalReviews);
+                    break;
+                case "name":
+                    query = ascending ? query.OrderBy(w => w.WorkerNavigation.FullName) : query.OrderByDescending(w => w.WorkerNavigation.FullName);
+                    break;
+                default:
+                    query = query.OrderBy(w => w.WorkerId);
+                    break;
+            }
+
+            // Pagination
+            var totalItems = await query.CountAsync();
+            var pageSize = Math.Max(1, request.PageSize);
+            var totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+            var currentPage = Math.Max(1, request.PageNumber);
+            var skip = (currentPage - 1) * pageSize;
+
+            var items = await query.Skip(skip).Take(pageSize).ToListAsync();
+
+            var resultItems = items.Select(w => new UserManagementResponse.WorkerProfileResponse
+            {
+                name = w.WorkerNavigation.FullName,
+                email = w.WorkerNavigation.Email,
+                phone = w.WorkerNavigation.Phone,
+                address = w.WorkerNavigation.Address,
+                experienceYears = w.ExperienceYears ?? 0,
+                bio = w.Bio ?? string.Empty,
+                isAvailable = w.IsAvailable ?? false,
+                TotalReviews = w.TotalReviews ?? 0,
+                AverageRating = w.AverageRating ?? 0m
+            }).ToList();
+
+            var response = new PaginationResponse<UserManagementResponse.WorkerProfileResponse>
+            {
+                TotalItems = totalItems,
+                TotalPages = totalPages,
+                CurrentPage = currentPage,
+                PageSize = pageSize,
+                Items = resultItems
+            };
+
+            return Ok(response);
+        }
+    }
+}

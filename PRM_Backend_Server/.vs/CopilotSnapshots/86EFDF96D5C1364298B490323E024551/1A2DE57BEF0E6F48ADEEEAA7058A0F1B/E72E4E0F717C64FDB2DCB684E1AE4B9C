@@ -1,0 +1,373 @@
+﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using PRM_Backend_Server.Models;
+using PRM_Backend_Server.ViewModels.Request;
+using PRM_Backend_Server.ViewModels.Response;
+using PRM_Backend_Server.ViewModels.Pagination;
+
+namespace PRM_Backend_Server.Controllers
+{
+    [Route("book/[controller]")]
+    [ApiController]
+    public class BookingController : ControllerBase
+    {
+        private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "pending", "confirmed", "in_progress", "completed", "cancelled"
+        };
+
+        private readonly HomeServiceAppContext _context;
+
+        public BookingController(HomeServiceAppContext context)
+        {
+            _context = context;
+        }
+
+        [HttpGet]
+        public async Task<ActionResult<PaginationResponse<BookingResponse>>> GetAllBookings([FromQuery] PaginationRequest request)
+        {
+            var query = _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .AsQueryable();
+
+            // Apply search across several fields
+            if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+            {
+                var st = request.SearchTerm.Trim();
+                query = query.Where(b =>
+                    (!string.IsNullOrEmpty(b.BookingCode) && EF.Functions.Like(b.BookingCode, $"%{st}%")) ||
+                    (b.Customer != null && !string.IsNullOrEmpty(b.Customer.FullName) && EF.Functions.Like(b.Customer.FullName, $"%{st}%")) ||
+                    (b.Worker != null && !string.IsNullOrEmpty(b.Worker.FullName) && EF.Functions.Like(b.Worker.FullName, $"%{st}%")) ||
+                    (b.Package != null && !string.IsNullOrEmpty(b.Package.PackageName) && EF.Functions.Like(b.Package.PackageName, $"%{st}%")) ||
+                    (!string.IsNullOrEmpty(b.Status) && EF.Functions.Like(b.Status, $"%{st}%"))
+                );
+            }
+
+            // Default ordering
+            query = query.OrderByDescending(b => b.CreatedAt);
+
+            var totalItems = await query.CountAsync();
+            var pageSize = Math.Max(1, request.PageSize);
+            var currentPage = Math.Max(1, request.PageNumber);
+            var totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+
+            var items = await query.Skip((currentPage - 1) * pageSize).Take(pageSize).ToListAsync();
+
+            var mapped = items.Select(MapBookingResponse).ToList();
+
+            var response = new PaginationResponse<BookingResponse>
+            {
+                TotalItems = totalItems,
+                TotalPages = totalPages,
+                CurrentPage = currentPage,
+                PageSize = pageSize,
+                Items = mapped
+            };
+
+            return Ok(response);
+        }
+
+        [HttpGet("{id:int}")]
+        public async Task<ActionResult<BookingResponse>> GetBookingById(int id)
+        {
+            var booking = await _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .FirstOrDefaultAsync(b => b.BookingId == id);
+
+            if (booking == null)
+            {
+                return NotFound(new { message = "Booking not found" });
+            }
+
+            return Ok(MapBookingResponse(booking));
+        }
+
+        [HttpGet("customer/{customerId:int}")]  //OK
+        public async Task<ActionResult<PaginationResponse<BookingResponse>>> GetBookingsByCustomer(int customerId, [FromQuery] PaginationRequest request)
+        {
+            var query = _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .Where(b => b.CustomerId == customerId)
+                .AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+            {
+                var st = request.SearchTerm.Trim();
+                query = query.Where(b =>
+                    (!string.IsNullOrEmpty(b.BookingCode) && EF.Functions.Like(b.BookingCode, $"%{st}%")) ||
+                    (b.Worker != null && !string.IsNullOrEmpty(b.Worker.FullName) && EF.Functions.Like(b.Worker.FullName, $"%{st}%")) ||
+                    (b.Package != null && !string.IsNullOrEmpty(b.Package.PackageName) && EF.Functions.Like(b.Package.PackageName, $"%{st}%")) ||
+                    (!string.IsNullOrEmpty(b.Status) && EF.Functions.Like(b.Status, $"%{st}%"))
+                );
+            }
+
+            query = query.OrderByDescending(b => b.BookingDate).ThenByDescending(b => b.StartTime);
+
+            var totalItems = await query.CountAsync();
+            var pageSize = Math.Max(1, request.PageSize);
+            var currentPage = Math.Max(1, request.PageNumber);
+            var totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+
+            var items = await query.Skip((currentPage - 1) * pageSize).Take(pageSize).ToListAsync();
+            var mapped = items.Select(MapBookingResponse).ToList();
+
+            var response = new PaginationResponse<BookingResponse>
+            {
+                TotalItems = totalItems,
+                TotalPages = totalPages,
+                CurrentPage = currentPage,
+                PageSize = pageSize,
+                Items = mapped
+            };
+
+            return Ok(response);
+        }
+
+        [HttpGet("worker/{workerId:int}")]
+        public async Task<ActionResult<PaginationResponse<BookingResponse>>> GetBookingsByWorker(int workerId, [FromQuery] PaginationRequest request)
+        {
+            var query = _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .Where(b => b.WorkerId == workerId)
+                .AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+            {
+                var st = request.SearchTerm.Trim();
+                query = query.Where(b =>
+                    (!string.IsNullOrEmpty(b.BookingCode) && EF.Functions.Like(b.BookingCode, $"%{st}%")) ||
+                    (b.Customer != null && !string.IsNullOrEmpty(b.Customer.FullName) && EF.Functions.Like(b.Customer.FullName, $"%{st}%")) ||
+                    (b.Package != null && !string.IsNullOrEmpty(b.Package.PackageName) && EF.Functions.Like(b.Package.PackageName, $"%{st}%")) ||
+                    (!string.IsNullOrEmpty(b.Status) && EF.Functions.Like(b.Status, $"%{st}%"))
+                );
+            }
+
+            query = query.OrderByDescending(b => b.BookingDate).ThenByDescending(b => b.StartTime);
+
+            var totalItems = await query.CountAsync();
+            var pageSize = Math.Max(1, request.PageSize);
+            var currentPage = Math.Max(1, request.PageNumber);
+            var totalPages = (int)Math.Ceiling(totalItems / (double)pageSize);
+
+            var items = await query.Skip((currentPage - 1) * pageSize).Take(pageSize).ToListAsync();
+            var mapped = items.Select(MapBookingResponse).ToList();
+
+            var response = new PaginationResponse<BookingResponse>
+            {
+                TotalItems = totalItems,
+                TotalPages = totalPages,
+                CurrentPage = currentPage,
+                PageSize = pageSize,
+                Items = mapped
+            };
+
+            return Ok(response);
+        }
+
+        [HttpPost]
+        public async Task<ActionResult<BookingResponse>> CreateBooking([FromBody] BookingRequest.CreateBookingRequest request)
+        {
+            if (request == null)
+            {
+                return BadRequest(new { message = "Invalid request" });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Address))
+            {
+                return BadRequest(new { message = "Address is required" });
+            }
+
+            if (request.BookingDate < DateOnly.FromDateTime(DateTime.Today))
+            {
+                return BadRequest(new { message = "Booking date cannot be in the past" });
+            }
+
+            var customer = await _context.Users.FirstOrDefaultAsync(u => u.UserId == request.CustomerId && u.Role == "customer");
+            if (customer == null)
+            {
+                return BadRequest(new { message = "Customer does not exist" });
+            }
+
+            var package = await _context.ServicePackages.FirstOrDefaultAsync(p => p.PackageId == request.PackageId && (p.IsActive ?? false));
+            if (package == null)
+            {
+                return BadRequest(new { message = "Service package does not exist or is inactive" });
+            }
+
+            User? workerUser = null;
+            if (request.WorkerId.HasValue)
+            {
+                workerUser = await _context.Users.FirstOrDefaultAsync(u => u.UserId == request.WorkerId.Value && u.Role == "worker");
+                var workerInfo = await _context.Workers.FirstOrDefaultAsync(w => w.WorkerId == request.WorkerId.Value && (w.IsAvailable ?? false));
+                if (workerUser == null || workerInfo == null)
+                {
+                    return BadRequest(new { message = "Worker does not exist or is unavailable" });
+                }
+            }
+
+            var booking = new Booking
+            {
+                BookingCode = GenerateBookingCode(),
+                CustomerId = request.CustomerId,
+                WorkerId = request.WorkerId,
+                PackageId = request.PackageId,
+                BookingDate = request.BookingDate,
+                StartTime = request.StartTime,
+                EndTime = request.StartTime.AddHours(package.DurationHours),
+                Address = request.Address.Trim(),
+                Note = request.Note,
+                TotalPrice = package.Price,
+                Status = request.WorkerId.HasValue ? "confirmed" : "pending",
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            };
+
+            _context.Bookings.Add(booking);
+            await _context.SaveChangesAsync();
+
+            booking.Customer = customer;
+            booking.Worker = workerUser;
+            booking.Package = package;
+
+            return CreatedAtAction(nameof(GetBookingById), new { id = booking.BookingId }, MapBookingResponse(booking));
+        }
+
+        [HttpPut("{id:int}/assign-worker")]
+        public async Task<ActionResult<BookingResponse>> AssignWorker(int id, [FromBody] BookingRequest.AssignWorkerRequest request)
+        {
+            var booking = await _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .FirstOrDefaultAsync(b => b.BookingId == id);
+
+            if (booking == null)
+            {
+                return NotFound(new { message = "Booking not found" });
+            }
+
+            if (booking.Status?.Equals("cancelled", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return BadRequest(new { message = "Cannot assign worker to a cancelled booking" });
+            }
+
+            var workerUser = await _context.Users.FirstOrDefaultAsync(u => u.UserId == request.WorkerId && u.Role == "worker");
+            var worker = await _context.Workers.FirstOrDefaultAsync(w => w.WorkerId == request.WorkerId && (w.IsAvailable ?? false));
+            if (workerUser == null || worker == null)
+            {
+                return BadRequest(new { message = "Worker does not exist or is unavailable" });
+            }
+
+            booking.WorkerId = request.WorkerId;
+            booking.Status = booking.Status?.Equals("pending", StringComparison.OrdinalIgnoreCase) == true ? "confirmed" : booking.Status;
+            booking.UpdatedAt = DateTime.Now;
+
+            await _context.SaveChangesAsync();
+
+            booking.Worker = workerUser;
+            return Ok(MapBookingResponse(booking));
+        }
+
+        [HttpPut("{id:int}/status")]
+        public async Task<ActionResult<BookingResponse>> UpdateStatus(int id, [FromBody] BookingRequest.UpdateBookingStatusRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Status) || !ValidStatuses.Contains(request.Status))
+            {
+                return BadRequest(new { message = "Invalid booking status" });
+            }
+
+            var booking = await _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .FirstOrDefaultAsync(b => b.BookingId == id);
+
+            if (booking == null)
+            {
+                return NotFound(new { message = "Booking not found" });
+            }
+
+            booking.Status = request.Status.ToLowerInvariant();
+            booking.UpdatedAt = DateTime.Now;
+            await _context.SaveChangesAsync();
+
+            return Ok(MapBookingResponse(booking));
+        }
+
+        [HttpPut("{id:int}/cancel")]
+        public async Task<ActionResult<BookingResponse>> CancelBooking(int id)
+        {
+            var booking = await _context.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Worker)
+                .Include(b => b.Package)
+                .FirstOrDefaultAsync(b => b.BookingId == id);
+
+            if (booking == null)
+            {
+                return NotFound(new { message = "Booking not found" });
+            }
+
+            if (booking.Status?.Equals("completed", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return BadRequest(new { message = "Completed booking cannot be cancelled" });
+            }
+
+            booking.Status = "cancelled";
+            booking.UpdatedAt = DateTime.Now;
+            await _context.SaveChangesAsync();
+
+            return Ok(MapBookingResponse(booking));
+        }
+
+        private static string GenerateBookingCode()
+            => $"BK{DateTime.Now:yyyyMMddHHmmssfff}";
+
+        private static BookingResponse MapBookingResponse(Booking booking)
+        {
+            return new BookingResponse
+            {
+                BookingId = booking.BookingId,
+                BookingCode = booking.BookingCode,
+                CustomerId = booking.CustomerId,
+                CustomerName = booking.Customer?.FullName,
+                WorkerId = booking.WorkerId,
+                WorkerName = booking.Worker?.FullName,
+                PackageId = booking.PackageId,
+                PackageName = booking.Package?.PackageName,
+                BookingDate = booking.BookingDate,
+                StartTime = booking.StartTime,
+                EndTime = booking.EndTime,
+                Address = booking.Address,
+                Note = booking.Note,
+                TotalPrice = booking.TotalPrice,
+                Status = booking.Status,
+                CreatedAt = booking.CreatedAt,
+                UpdatedAt = booking.UpdatedAt
+            };
+        }
+
+        [HttpGet("categories")]
+        public async Task<ActionResult<List<GeneralResponse.CategoryResponse>>> GetListCategory()
+        {
+            var categories = await _context.ServiceCategories
+                .OrderBy(c => c.CategoryName)
+                .Select(c => new GeneralResponse.CategoryResponse
+                {
+                    CategoryId = c.CategoryId,
+                    GategoryName = c.CategoryName
+                })
+                .ToListAsync();
+
+            return Ok(categories);
+        }
+    }
+}

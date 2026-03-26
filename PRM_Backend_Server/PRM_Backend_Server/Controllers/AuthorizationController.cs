@@ -1,0 +1,229 @@
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using PRM_Backend_Server.ViewModels.Request;
+using PRM_Backend_Server.ViewModels.Response;
+using PRM_Backend_Server.Models;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Authorization;
+
+namespace PRM_Backend_Server.Controllers
+{
+    [Route("auth/[controller]")]
+    [ApiController]
+    public class AuthorizationController : ControllerBase
+    {
+        private readonly HomeServiceAppContext _db;
+        private readonly ILogger<AuthorizationController> _logger;
+        private readonly IConfiguration _configuration;
+
+        public AuthorizationController(HomeServiceAppContext db, ILogger<AuthorizationController> logger, IConfiguration configuration)
+        {
+            _db = db;
+            _logger = logger;
+            _configuration = configuration;
+        }
+
+        [HttpPost("register")]
+        public async Task<ActionResult<AuthorizationResponse.RegisterResponse>> Register([FromBody] AuthorizationRequest.RegisterRequest request)
+        {
+            if (request == null)
+                return BadRequest(new AuthorizationResponse.RegisterResponse { message = "Invalid request, step:1" });
+
+            if (request.password != request.confirmPassword)
+                return BadRequest(new AuthorizationResponse.RegisterResponse { message = "Password and confirm password do not match, step:2" });
+
+            var exists = await _db.Users.AnyAsync(u => u.Email == request.email);
+            if (exists)
+                return Conflict(new AuthorizationResponse.RegisterResponse { message = "Email already registered, step:3" });
+
+            // create user
+            var passwordHash = HashPassword(request.password);
+            var user = new User
+            {
+                FullName = request.name,
+                Email = request.email,
+                Phone = request.phone ?? string.Empty,
+                Address = request.address,
+                PasswordHash = passwordHash,
+                Role = "customer",
+                IsActive = true
+            };
+
+            _db.Users.Add(user);
+            await _db.SaveChangesAsync();
+
+            return Ok(new AuthorizationResponse.RegisterResponse { message = "Register successful" });
+        }
+
+        [HttpPost("login")]
+        public async Task<ActionResult<AuthorizationResponse.LoginResponse>> Login([FromBody] AuthorizationRequest.LoginRequest request)
+        {
+            if (request == null)
+                return BadRequest(new AuthorizationResponse.LoginResponse { message = "Invalid request, step:1" });
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == request.email);
+            if (user == null)
+                return Unauthorized(new AuthorizationResponse.LoginResponse { message = "Invalid credentials, step:2" });
+
+            if (!VerifyPassword(request.password, user.PasswordHash))
+                return Unauthorized(new AuthorizationResponse.LoginResponse { message = "Invalid credentials, step:3" });
+
+            var accessToken = GenerateJwtToken(user);
+            // generate tokens (simple GUID-based tokens for demo)
+            var refreshToken = Guid.NewGuid().ToString();
+
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpirationTime = DateTime.UtcNow.AddDays(7);
+            _db.Users.Update(user);
+            _db.SaveChanges();
+
+            return Ok(new AuthorizationResponse.LoginResponse
+            {
+                accessToken = accessToken,
+                refreshToken = refreshToken,
+                message = "Login successful"
+            });
+        }
+
+        [Authorize]
+        [HttpPost("change-password")]
+        public async Task<ActionResult<AuthorizationResponse.ChangePasswordResponse>> ChangePassword([FromBody] AuthorizationRequest.ChangePasswordRequest request)
+        {
+            if (request == null)
+                return BadRequest(new AuthorizationResponse.ChangePasswordResponse { message = "Invalid request" });
+
+            if (request.newPassword != request.confirmNewPassword)
+                return BadRequest(new AuthorizationResponse.ChangePasswordResponse { message = "New password and confirmation do not match" });
+
+            // Extract email from JWT Token instead of relying on the client request body
+            var emailClaim = User.FindFirst(ClaimTypes.Email)?.Value;
+            if (string.IsNullOrEmpty(emailClaim))
+                return Unauthorized(new AuthorizationResponse.ChangePasswordResponse { message = "Invalid token" });
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == emailClaim);
+            if (user == null)
+                return NotFound(new AuthorizationResponse.ChangePasswordResponse { message = "User not found" });
+
+            if (!VerifyPassword(request.oldPassword, user.PasswordHash))
+                return Unauthorized(new AuthorizationResponse.ChangePasswordResponse { message = "Old password is incorrect" });
+
+            user.PasswordHash = HashPassword(request.newPassword);
+            _db.Users.Update(user);
+            await _db.SaveChangesAsync();
+
+            return Ok(new AuthorizationResponse.ChangePasswordResponse { message = "Password changed successfully" });
+        }
+
+        [HttpPost("reset-password")]
+        public ActionResult<AuthorizationResponse.ResetPasswordResponse> ResetPassword([FromBody] AuthorizationRequest.ResetPasswordRequest request)
+        {
+            if (request == null)
+                return BadRequest(new AuthorizationResponse.ResetPasswordResponse { message = "Invalid request" });
+
+            // In a real implementation you'd generate and store an OTP and send it via email/SMS.
+            // Here we'll just return a success message to indicate the flow.
+            return Ok(new AuthorizationResponse.ResetPasswordResponse { message = "OTP sent to registered email (demo)" });
+        }
+
+        [HttpPost("verify-otp-reset-password")]
+        public ActionResult<AuthorizationResponse.VerifyOTPResetPasswordResponse> VerifyOTP([FromBody] AuthorizationRequest.VerifyOTPResetPasswordRequest request)
+        {
+            if (request == null)
+                return BadRequest(new AuthorizationResponse.VerifyOTPResetPasswordResponse { message = "Invalid request" });
+
+            // In a real implementation verify the OTP stored for this user.
+            // For demo accept any non-empty OTP.
+            if (string.IsNullOrWhiteSpace(request.otp))
+                return BadRequest(new AuthorizationResponse.VerifyOTPResetPasswordResponse { message = "Invalid OTP" });
+
+            return Ok(new AuthorizationResponse.VerifyOTPResetPasswordResponse { message = "OTP verified (demo)" });
+        }
+
+        [HttpPost("set-new-password")]
+        public async Task<ActionResult<AuthorizationResponse.SetNewPasswordResponse>> SetNewPassword([FromBody] AuthorizationRequest.SetNewPasswordRequest request)
+        {
+            if (request == null)
+                return BadRequest(new AuthorizationResponse.SetNewPasswordResponse { message = "Invalid request" });
+
+            if (request.newPassword != request.confirmNewPassword)
+                return BadRequest(new AuthorizationResponse.SetNewPasswordResponse { message = "New password and confirmation do not match" });
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == request.email);
+            if (user == null)
+                return NotFound(new AuthorizationResponse.SetNewPasswordResponse { message = "User not found" });
+
+            // In a real flow you'd verify OTP before allowing this.
+            user.PasswordHash = HashPassword(request.newPassword);
+            _db.Users.Update(user);
+            await _db.SaveChangesAsync();
+
+            return Ok(new AuthorizationResponse.SetNewPasswordResponse { message = "Password reset successfully" });
+        }
+
+        [HttpPost("refresh-token")]
+        public ActionResult<AuthorizationResponse.RefreshTokenResponse> RefreshToken([FromBody] AuthorizationRequest.RefreshTokenRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.refreshToken))
+                return BadRequest(new AuthorizationResponse.RefreshTokenResponse { message = "Invalid refresh token" });
+
+            // In a real implementation you'd validate the refresh token.
+            var newAccessToken = Guid.NewGuid().ToString();
+            var newRefreshToken = Guid.NewGuid().ToString();
+
+            return Ok(new AuthorizationResponse.RefreshTokenResponse
+            {
+                accessToken = newAccessToken,
+                refreshToken = newRefreshToken,
+                message = "Token refreshed (demo)"
+            });
+        }
+
+        private static string HashPassword(string password)
+        {
+            return BCrypt.Net.BCrypt.HashPassword(password);
+        }
+
+        private static bool VerifyPassword(string password, string storedHash)
+        {
+            try
+            {
+                return BCrypt.Net.BCrypt.Verify(password, storedHash);
+            }
+            catch (BCrypt.Net.SaltParseException)
+            {
+                return false;
+            }
+        }
+
+        private string GenerateJwtToken(User user)
+        {
+            var jwtKeyStr = _configuration["Jwt:Key"] ?? throw new ArgumentNullException("Jwt:Key is missing in appsettings.json");
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKeyStr));
+
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256); 
+
+            var claims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, user.UserId.ToString()),
+                new Claim(ClaimTypes.Email, user.Email),
+                new Claim(ClaimTypes.Role, user.Role ?? "customer"),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
+
+            var token = new JwtSecurityToken(
+                issuer: _configuration["Jwt:Issuer"],
+                audience: _configuration["Jwt:Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddHours(2),
+                signingCredentials: creds
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+    }
+}

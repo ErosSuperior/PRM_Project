@@ -1,0 +1,164 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using PRM_Backend_Server.Models;
+using PRM_Backend_Server.ViewModels.Response;
+using PRM_Backend_Server.ViewModels.Pagination;
+using System.Security.Claims;
+
+namespace PRM_Backend_Server.Controllers
+{
+    [Route("home/[controller]")]
+    [ApiController]
+    public class HomeController : ControllerBase
+    {
+        private readonly HomeServiceAppContext _db;
+        private readonly ILogger<HomeController> _logger;
+
+        public HomeController(HomeServiceAppContext db, ILogger<HomeController> logger)
+        {
+            _db = db;
+            _logger = logger;
+        }
+
+        // Customer home: returns name, avatar and paginated categories
+        [Authorize(Roles = "customer,admin,worker")]
+        [HttpGet("customer")]
+        public async Task<IActionResult> CustomerHome([FromQuery] PaginationRequest pagination)
+        {
+            var callerSub = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
+                ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int callerId = 0;
+            if (!string.IsNullOrEmpty(callerSub)) int.TryParse(callerSub, out callerId);
+
+            var user = await _db.Users.FindAsync(callerId);
+            if (user == null) return Unauthorized();
+
+            // Query categories
+            var catQuery = _db.ServiceCategories.AsQueryable().OrderBy(c => c.CategoryName);
+            var total = await catQuery.CountAsync();
+            var pageSize = Math.Max(1, pagination.PageSize);
+            var page = Math.Max(1, pagination.PageNumber);
+            var cats = await catQuery.Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(c => new HomeResponse.ServiceCategoryDto
+                {
+                    CategoryId = c.CategoryId,
+                    CategoryName = c.CategoryName,
+                    Description = c.Description,
+                    ImageUrl = c.ImageUrl
+                }).ToListAsync();
+
+            var response = new HomeResponse.CustomerHome
+            {
+                name = user.FullName,
+                avatar = user.Avatar,
+                categories = new PaginationResponse<HomeResponse.ServiceCategoryDto>
+                {
+                    TotalItems = total,
+                    TotalPages = (int)Math.Ceiling(total / (double)pageSize),
+                    CurrentPage = page,
+                    PageSize = pageSize,
+                    Items = cats
+                }
+            };
+
+            return Ok(response);
+        }
+
+        // Admin home: high level metrics
+        [Authorize(Roles = "admin")]
+        [HttpGet("admin")]
+        public async Task<IActionResult> AdminHome()
+        {
+            var callerSub = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
+                ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            int callerId = 0;
+            if (!string.IsNullOrEmpty(callerSub)) int.TryParse(callerSub, out callerId);
+
+            var user = await _db.Users.FindAsync(callerId);
+            if (user == null) return Unauthorized();
+
+            var totalUsers = await _db.Users.CountAsync();
+            var totalBookings = await _db.Bookings.CountAsync();
+            var pendingBookings = await _db.Bookings.CountAsync(b => b.Status == "pending");
+            var totalRevenue = await _db.Payments.Where(p => p.PaymentStatus == "completed").SumAsync(p => p.Booking.TotalPrice ?? 0m);
+
+            var recent = await _db.ViewBookingDetails.OrderByDescending(v => v.BookingDate).Take(5).ToListAsync();
+            var recentList = recent.Select(r => new HomeResponse.BookingSummary
+            {
+                BookingId = r.BookingId,
+                BookingCode = r.BookingCode,
+                BookingDate = r.BookingDate.ToDateTime(TimeOnly.MinValue),
+                StartTime = null,
+                CustomerName = r.CustomerName,
+                PackageName = r.PackageName,
+                Status = r.Status,
+                Price = r.Price
+            }).ToList();
+
+            var response = new HomeResponse.AdminHome
+            {
+                name = user.FullName,
+                avatar = user.Avatar,
+                totalUsers = totalUsers,
+                totalBookings = totalBookings,
+                pendingBookings = pendingBookings,
+                totalRevenue = totalRevenue,
+                recentBookings = recentList
+            };
+
+            return Ok(response);
+        }
+
+        // Worker home: worker metrics and upcoming bookings
+        [Authorize(Roles = "worker")]
+        [HttpGet("worker")]
+        public async Task<IActionResult> WorkerHome()
+        {
+            var callerSub = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
+                ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(callerSub) || !int.TryParse(callerSub, out var callerId)) return Unauthorized();
+
+            var user = await _db.Users.Include(u => u.Worker).FirstOrDefaultAsync(u => u.UserId == callerId);
+            if (user == null || user.Worker == null) return NotFound();
+
+            var worker = user.Worker;
+
+            // upcoming bookings where this worker is assigned and booking date >= today and status not cancelled
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var upcoming = await _db.Bookings
+                .Include(b => b.Customer)
+                .Include(b => b.Package)
+                .Where(b => b.WorkerId == callerId && b.BookingDate >= today && b.Status != "cancelled")
+                .OrderBy(b => b.BookingDate)
+                .ThenBy(b => b.StartTime)
+                .Take(10)
+                .ToListAsync();
+
+            var upcomingList = upcoming.Select(b => new HomeResponse.BookingSummary
+            {
+                BookingId = b.BookingId,
+                BookingCode = b.BookingCode,
+                BookingDate = b.BookingDate.ToDateTime(TimeOnly.MinValue),
+                StartTime = b.StartTime.ToString(),
+                CustomerName = b.Customer.FullName,
+                PackageName = b.Package.PackageName,
+                Status = b.Status,
+                Price = b.TotalPrice
+            }).ToList();
+
+            var response = new HomeResponse.WorkerHome
+            {
+                name = user.FullName,
+                avatar = user.Avatar,
+                experienceYears = worker.ExperienceYears ?? 0,
+                isAvailable = worker.IsAvailable ?? false,
+                averageRating = worker.AverageRating ?? 0m,
+                totalReviews = worker.TotalReviews ?? 0,
+                upcomingBookings = upcomingList
+            };
+
+            return Ok(response);
+        }
+    }
+}

@@ -1,0 +1,66 @@
+﻿using Microsoft.EntityFrameworkCore;
+using PRM_Backend_Server.Models;
+
+namespace PRM_Backend_Server
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+
+            // Add services to the container.
+
+            builder.Services.AddControllers();
+            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+            builder.Services.AddEndpointsApiExplorer();
+            builder.Services.AddSwaggerGen();
+
+            // Configure JWT Authentication
+            var jwtKeyStr = builder.Configuration["Jwt:Key"] ?? "super_secret_key_which_should_be_at_least_32_bytes_long";
+            var key = System.Text.Encoding.UTF8.GetBytes(jwtKeyStr);
+
+            builder.Services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(options =>
+            {
+                options.RequireHttpsMetadata = false; // Set to true in prod
+                options.SaveToken = true;
+                options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+                {
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(key),
+                    ValidateIssuer = false, // Set to true and configure in production
+                    ValidateAudience = false, // Set to true and configure in production
+                    ClockSkew = TimeSpan.Zero
+                };
+            });
+
+            // Add EF Core DbContext
+            var connectionString = builder.Configuration.GetConnectionString("MyCnn") ?? "";
+            builder.Services.AddDbContext<HomeServiceAppContext>(options => options.UseSqlServer(connectionString));
+
+            var app = builder.Build();
+
+            // Configure the HTTP request pipeline.
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseSwagger();
+                app.UseSwaggerUI();
+            }
+
+            app.UseHttpsRedirection();
+
+            app.UseAuthentication();
+            app.UseAuthorization();
+
+
+            app.MapControllers();
+
+            app.Run();
+        }
+    }
+}

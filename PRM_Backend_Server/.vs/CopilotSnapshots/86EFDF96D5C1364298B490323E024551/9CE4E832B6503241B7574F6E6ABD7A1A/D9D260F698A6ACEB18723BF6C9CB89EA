@@ -1,0 +1,33 @@
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using PRM_Backend_Server.Models;
+using PRM_Backend_Server.ViewModels.Pagination;
+
+namespace PRM_Backend_Server.Controllers
+{
+    [Route("user/[controller]")]
+    [ApiController]
+    public class UserManagementController : ControllerBase
+    {
+        private readonly HomeServiceAppContext _db;
+        private readonly ILogger<AuthorizationController> _logger;
+        private readonly IConfiguration _configuration;
+
+        public UserManagementController(HomeServiceAppContext db, ILogger<AuthorizationController> logger, IConfiguration configuration)
+        {
+            _db = db;
+            _logger = logger;
+            _configuration = configuration;
+        }
+
+        [Authorize(Roles = "admin,customer")]
+        [HttpGet("list")]
+        public IActionResult GetWorkerUsers([FromQuery] PaginationRequest request)
+        {
+            
+            
+            return Ok(new PaginationResponse<User> {  });
+        }
+    }
+}

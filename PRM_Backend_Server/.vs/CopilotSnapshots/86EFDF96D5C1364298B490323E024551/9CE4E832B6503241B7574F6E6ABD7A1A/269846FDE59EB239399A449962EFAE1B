@@ -1,0 +1,12 @@
+﻿{
+  "ConnectionStrings": {
+    "MyCnn": "Server=LAPTOP-VGFFHU24\\DAT;uid=sa;password=123;database=HomeServiceApp;Encrypt=True;TrustServerCertificate=True;"
+  },
+    "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
